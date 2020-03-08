@@ -1,14 +1,15 @@
 import argparse
-import datetime
+from datetime import datetime
 import http.client
 import json
 from collections import Counter
 
 USER_AGENT = 'Mozilla/5.0 (Windows NT 6.1; Win64; x64)'
+GITHUB_FORMAT_DATETIME = '%Y-%m-%dT%H:%M:%SZ'
 MAX_ACTIVE_USER = 30
 DAYS_OLD_PULL = 30
 DAYS_OLD_ISSUES = 14
-TEST_DATA = False
+TEST_DATA = True
 
 def get_arguments():
     parser = argparse.ArgumentParser()
@@ -26,7 +27,7 @@ def get_arguments():
     )
     parser.add_argument(
         '-f', '--format', dest='date_format', action='store',
-        default='%Y-%m-%dT%H:%M:%SZ', help=('Формат даты.')
+        default=GITHUB_FORMAT_DATETIME, help=('Формат даты.')
     )
     parser.add_argument(
         '-b', '--branch', dest='branch', action='store', default='master',
@@ -34,6 +35,10 @@ def get_arguments():
     )
     args = parser.parse_args()
     return args
+
+
+def format_github_datetime(created):
+    return datetime.strptime(created, GITHUB_FORMAT_DATETIME)
 
 
 def get_connection():
@@ -54,64 +59,52 @@ def get_data_from_url(url):
 
     return owner, repo
 
-def get_response_from_api_github():
+
+def urlcode_parameters(parameters):
+    result = ''
+    for key, value in parameters.items():
+        result += f'&{key}={value}'
+    return result
+
+
+def generator_response_from_api_github(
+        connection, owner, repo, type_api, parameters):
     page = 0
     per_page = 100
-    pulls = Counter()
-    created = ''
-    flag = True
-    pass
-
-def get_active_users_response(connection, owner, repo, page=1, per_page=100):
-    connection.request('GET',
-                       (f'/repos/{owner}/{repo}/commits?'
-                        f'page={page}per_page={per_page}'),
-                       headers={'User-Agent': USER_AGENT})
-    response = json.loads(connection.getresponse().read().decode())
-    return response
-
-
-def get_active_users(connection, owner, repo,
-                     start_date=None, end_date=None, branch=None):
-    page = 0
-    per_page = 100
-    active_users = Counter()
 
     while True:
         page += 1
-        print(page)
-        # response = get_active_users_response(
-        #     connection, owner, repo, page, per_page
-        # )
-        url = f'/repos/{owner}/{repo}/commits?page={page}&per_page={per_page}'
-
-        if start_date:
-            url += f'&since={start_date}'
-
-        if end_date:
-            url += f'&until={end_date}'
-
-        if branch:
-            url += f'&sha={branch}'
+        # print(page)
+        url = (f'/repos/{owner}/{repo}/{type_api}'
+               f'?page={page}&per_page={per_page}')
+        url += urlcode_parameters(parameters)
 
         connection.request('GET', url, headers={'User-Agent': USER_AGENT})
         response = json.loads(connection.getresponse().read().decode())
 
         if not isinstance(response, list):
-            break
+            raise StopIteration()
 
-        for id, el in enumerate(response):
-            if el['author'] and el['author'].get('login', None):
-                author = el['author']['login']
-                active_users.update([author])
+        for element in response:
+            yield element
 
         if len(response) < per_page:
-            break
+            raise StopIteration()
 
-        print(active_users.most_common(5))
+
+def get_active_users(connection, owner, repo,
+                     start_date=None, end_date=None, branch=None):
+    type_api = 'commits'
+    active_users = Counter()
+    parameters = {'since': start_date, 'until': end_date, 'sha': branch}
+
+    for commit in generator_response_from_api_github(
+            connection, owner, repo, type_api, parameters):
+        if commit['author'] and commit['author'].get('login', None):
+            author = commit['author']['login']
+            active_users.update([author])
 
     return active_users
-
 
 def print_active_users(active_users):
     print('|{:*^31}|'.format(''))
@@ -128,48 +121,19 @@ def print_active_users(active_users):
 
 def get_pulls(connection, owner, repo, start_date=None,
               end_date=None, branch=None, state='open'):
-    page = 0
-    per_page = 100
+    type_api = 'pulls'
     pulls = Counter()
-    created = ''
-    flag = True
+    parameters = {'sort': 'created', 'direction': 'desc',
+                  'state': state, 'base': branch}
 
-    while flag:
-        page += 1
-        print(page)
-        # response = get_active_users_response(
-        #     connection, owner, repo, page, per_page
-        # )
-        url = (f'/repos/{owner}/{repo}/pulls'
-               f'?page={page}&per_page={per_page}'
-               f'&sort=created&direction=desc')
+    for pull in generator_response_from_api_github(
+            connection, owner, repo, type_api, parameters):
+        created = pull['created_at']
 
-        if branch:
-            url += f'&base={branch}'
-
-        if state:
-            url += f'&state={state}'
-
-        print(url)
-        connection.request('GET', url, headers={'User-Agent': USER_AGENT})
-        response = json.loads(connection.getresponse().read().decode())
-
-        if not isinstance(response, list):
+        if created < start_date:
             break
 
-        for idx, el in enumerate(response):
-            created = el['created_at']
-            if created < start_date:
-                flag = False
-                break
-
-            pulls.update([state])
-            print(created, state)
-
-        if len(response) < per_page:
-            break
-
-        # print(pulls)
+        pulls.update([state])
 
     return pulls
 
@@ -184,60 +148,27 @@ def print_pulls(pulls):
     print('|{:*^21}|'.format(''))
 
 
-def format_github_datetime(created):
-    return datetime.datetime.strptime(created, '%Y-%m-%dT%H:%M:%SZ')
-
-
 def get_old_pulls(connection, owner, repo, start_date=None,
-                  end_date=None, branch=None, state='open'):
-    page = 0
-    per_page = 100
-    pulls = Counter()
-    created = ''
-    flag = True
-    now = datetime.datetime.now()
+                  end_date=None, branch=None):
+    old_pulls = Counter()
+    type_api = 'pulls'
+    parameters = {'sort': 'created', 'direction': 'desc',
+                  'state': 'open', 'base': branch}
+    now = datetime.now()
 
-    while flag:
-        page += 1
-        print(page)
-        # response = get_active_users_response(
-        #     connection, owner, repo, page, per_page
-        # )
-        url = (f'/repos/{owner}/{repo}/pulls'
-               f'?page={page}&per_page={per_page}'
-               f'&sort=created&direction=desc')
+    for pull in generator_response_from_api_github(
+            connection, owner, repo, type_api, parameters):
+        created = pull['created_at']
 
-        if branch:
-            url += f'&base={branch}'
-
-        if state:
-            url += f'&state={state}'
-
-        print(url)
-        connection.request('GET', url, headers={'User-Agent': USER_AGENT})
-        response = json.loads(connection.getresponse().read().decode())
-
-        if not isinstance(response, list):
+        if created < start_date:
             break
 
-        for idx, el in enumerate(response):
-            created = el['created_at']
+        delta_days = (now - format_github_datetime(created)).days
 
-            if created < start_date:
-                flag = False
-                break
+        if delta_days > DAYS_OLD_PULL:
+            old_pulls.update(['old'])
 
-            delta_days = (now - format_github_datetime(created)).days
-
-            if delta_days > DAYS_OLD_PULL:
-                pulls.update(['old'])
-
-            print(created, state)
-
-        if len(response) < per_page:
-            break
-
-    return pulls
+    return old_pulls
 
 
 def print_old_pulls(old_pulls):
@@ -250,50 +181,20 @@ def print_old_pulls(old_pulls):
 
 def get_issues(connection, owner, repo, start_date=None,
               end_date=None, branch=None, state='open'):
-    page = 0
-    per_page = 100
-    counter = Counter()
-    created = ''
-    flag = True
-    while flag:
-        page += 1
-        print(page)
-        # response = get_active_users_response(
-        #     connection, owner, repo, page, per_page
-        # )
-        url = (f'/repos/{owner}/{repo}/issues'
-               f'?page={page}&per_page={per_page}'
-               f'&filter=all'
-               f'&sort=created&direction=desc')
+    issues = Counter()
+    type_api = 'issues'
+    parameters = {'sort': 'created', 'direction': 'desc',
+                  'filter': 'all', 'base': branch, 'state': state}
+    for issue in generator_response_from_api_github(
+            connection, owner, repo, type_api, parameters):
+        created = issue['created_at']
 
-        if branch:
-            url += f'&base={branch}'
-
-        if state:
-            url += f'&state={state}'
-
-        print(url)
-        connection.request('GET', url, headers={'User-Agent': USER_AGENT})
-        response = json.loads(connection.getresponse().read().decode())
-
-        if not isinstance(response, list):
+        if created < start_date:
             break
 
-        for idx, el in enumerate(response):
-            created = el['created_at']
-            if created < start_date:
-                flag = False
-                break
+        issues.update([state])
 
-            counter.update([state])
-            # print(created, state)
-
-        if len(response) < per_page:
-            break
-
-        # print(pulls)
-
-    return counter
+    return issues
 
 
 def print_issues(issues):
@@ -305,56 +206,27 @@ def print_issues(issues):
     print('|{: ^10}|{: ^10}|'.format(issues['open'], issues['closed']))
     print('|{:*^21}|'.format(''))
 
-
 def get_old_issues(connection, owner, repo, start_date=None,
-                  end_date=None, branch=None, state='open'):
-    page = 0
-    per_page = 100
-    counter = Counter()
-    created = ''
-    flag = True
-    now = datetime.datetime.now()
+              end_date=None, branch=None, state='open'):
+    old_issues = Counter()
+    type_api = 'issues'
+    parameters = {'sort': 'created', 'direction': 'desc',
+                  'filter': 'all', 'base': branch, 'state': state}
+    now = datetime.now()
 
-    while flag:
-        page += 1
-        print(page)
-        # response = get_active_users_response(
-        #     connection, owner, repo, page, per_page
-        # )
-        url = (f'/repos/{owner}/{repo}/issues'
-               f'?page={page}&per_page={per_page}'
-               f'&filter=all'
-               f'&sort=created&direction=desc')
+    for issue in generator_response_from_api_github(
+            connection, owner, repo, type_api, parameters):
+        created = issue['created_at']
 
-        if branch:
-            url += f'&base={branch}'
-
-        if state:
-            url += f'&state={state}'
-
-        print(url)
-        connection.request('GET', url, headers={'User-Agent': USER_AGENT})
-        response = json.loads(connection.getresponse().read().decode())
-
-        if not isinstance(response, list):
+        if created < start_date:
             break
 
-        for idx, el in enumerate(response):
-            created = el['created_at']
+        delta_days = (now - format_github_datetime(created)).days
 
-            if created < start_date:
-                flag = False
-                break
+        if delta_days > DAYS_OLD_ISSUES:
+            old_issues.update(['old'])
 
-            delta_days = (now - format_github_datetime(created)).days
-
-            if delta_days > DAYS_OLD_ISSUES:
-                counter.update(['old'])
-
-        if len(response) < per_page:
-            break
-
-    return counter
+    return old_issues
 
 
 def print_old_issues(old_issues):
@@ -368,9 +240,9 @@ def print_old_issues(old_issues):
 def main():
     args = get_arguments()
     url = args.url
+    date_format = args.date_format
     start_date = args.start_date
     end_date = args.end_date
-    date_format = args.date_format
     branch = args.branch
 
     if TEST_DATA:
@@ -380,25 +252,28 @@ def main():
 
     connection = get_connection()
     owner, repo = get_data_from_url(url)
-    print(owner, repo)
-    # active_users = get_active_users(connection, owner, repo,
-    #                                 start_date=start_date, end_date=end_date,
-    #                                 branch=branch)
-    # print_active_users(active_users)
-    
-    # pulls_open = get_pulls(connection, owner, repo, start_date=start_date,
-    #                        end_date=end_date, branch=branch)
-    # pulls_closed = get_pulls(connection, owner, repo, start_date=start_date,
-    #                          end_date=end_date, branch=branch, state='closed')
-    # print_pulls(pulls_open + pulls_closed)
-    # old_pulls = get_old_pulls(connection, owner, repo, start_date=start_date,
-    #                           end_date=end_date, branch=branch)
-    # print_old_pulls(old_pulls)
-    # issues_open = get_issues(connection, owner, repo, start_date=start_date,
-    #                          end_date=end_date, branch=branch)
-    # issues_closed = get_issues(connection, owner, repo, start_date=start_date,
-    #                            end_date=end_date, branch=branch, state='closed')
-    # print_issues(issues_open + issues_closed)
+    # print(owner, repo)
+    active_users = get_active_users(connection, owner, repo,
+                                    start_date=start_date, end_date=end_date,
+                                    branch=branch)
+    print_active_users(active_users)
+
+    pulls_open = get_pulls(connection, owner, repo, start_date=start_date,
+                           end_date=end_date, branch=branch)
+    pulls_closed = get_pulls(connection, owner, repo, start_date=start_date,
+                             end_date=end_date, branch=branch, state='closed')
+    print_pulls(pulls_open + pulls_closed)
+
+    old_pulls = get_old_pulls(connection, owner, repo, start_date=start_date,
+                              end_date=end_date, branch=branch)
+    print_old_pulls(old_pulls)
+
+    issues_open = get_issues(connection, owner, repo, start_date=start_date,
+                             end_date=end_date, branch=branch)
+    issues_closed = get_issues(connection, owner, repo, start_date=start_date,
+                               end_date=end_date, branch=branch, state='closed')
+    print_issues(issues_open + issues_closed)
+
     old_issues = get_old_issues(connection, owner, repo, start_date=start_date,
                                 end_date=end_date, branch=branch)
     print_old_issues(old_issues)
