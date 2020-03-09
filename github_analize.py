@@ -1,9 +1,22 @@
 import argparse
-from datetime import datetime
 import http.client
 import json
+from base64 import b64encode
 from collections import Counter
+from datetime import datetime
+import logging
+import os
+import sys
 
+# Определяем текущую директорию, чтобы лог лежал рядом со скриптом
+curdir = os.path.abspath(os.path.dirname(sys.argv[0]))
+logging.basicConfig(
+    format=u"%(levelname)-8s [%(asctime)s] %(message)s",
+    level=logging.DEBUG,
+    datefmt='%Y-%m-%d %H:%M:%S',
+    filename=f"{curdir}/github_analyze.log")
+
+CONFIG_FILE = 'config.json'
 USER_AGENT = 'Mozilla/5.0 (Windows NT 6.1; Win64; x64)'
 GITHUB_FORMAT_DATETIME = '%Y-%m-%dT%H:%M:%SZ'
 MAX_ACTIVE_USER = 30
@@ -104,19 +117,27 @@ def urlcode_parameters(parameters):
 
 
 def generator_response_from_api_github(
-        connection, owner, repo, type_api, parameters):
+        connection, owner, repo, type_api, parameters, auth=None):
     page = 0
     per_page = 100
+    headers = {'User-Agent': USER_AGENT}
+
+    if auth:
+        headers['Authorization'] = f'Basic {auth}'
 
     while True:
         page += 1
-        # print(page)
         url = (f'/repos/{owner}/{repo}/{type_api}'
                f'?page={page}&per_page={per_page}')
         url += urlcode_parameters(parameters)
 
-        connection.request('GET', url, headers={'User-Agent': USER_AGENT})
-        response = json.loads(connection.getresponse().read().decode())
+        connection.request('GET', url, headers=headers)
+        obj_response = connection.getresponse()
+
+        if obj_response.status != 200:
+            logging.error(f"Status: {obj_response.status}. URL: {url}.")
+
+        response = json.loads(obj_response.read().decode())
 
         if not isinstance(response, list):
             raise StopIteration()
@@ -128,8 +149,8 @@ def generator_response_from_api_github(
             raise StopIteration()
 
 
-def get_active_users(connection, owner, repo,
-                     start_date=None, end_date=None, branch=None):
+def get_active_users(connection, owner, repo, start_date=None,
+                     end_date=None, branch=None, auth=None):
     type_api = 'commits'
     active_users = Counter()
     parameters = dict()
@@ -141,7 +162,7 @@ def get_active_users(connection, owner, repo,
         parameters['until'] = format_str_datetime_github(end_date)
 
     for commit in generator_response_from_api_github(
-            connection, owner, repo, type_api, parameters):
+            connection, owner, repo, type_api, parameters, auth=auth):
         if commit['author'] and commit['author'].get('login', None):
             author = commit['author']['login']
             active_users.update([author])
@@ -258,6 +279,29 @@ def get_old_issues(
     return old_issues
 
 
+def read_config(config_file):
+    config = None
+
+    try:
+        with open(config_file) as json_data_file:
+            config = json.load(json_data_file)
+    except FileNotFoundError:
+        logging.error(f'Not find configuration file "{config_file}".')
+
+    return config
+
+
+def get_auth(config):
+    auth = None
+
+    if config and 'user' in config and 'password' in config:
+        auth = b64encode(
+            f"{config['user']}:{config['password']}".encode()
+        ).decode("ascii")
+
+    return auth
+
+
 def main():
     args = get_arguments()
     url = args.url
@@ -266,18 +310,21 @@ def main():
     end_date = get_end_date(args.end_date, date_format)
     branch = args.branch
     now = datetime.utcnow()
+    config = read_config(CONFIG_FILE)
+    auth = get_auth(config)
 
     if TEST_DATA:
         url = 'https://github.com/fastlane/fastlane/'
         branch = 'master'
         start_date = datetime.strptime('2019-12-30T00:00:00Z',
                                        GITHUB_FORMAT_DATETIME)
+        auth = b64encode(b"ilq@mail.ru:GH84Newway").decode("ascii")
 
     connection = get_connection()
     owner, repo = get_data_from_url(url)
     active_users = get_active_users(connection, owner, repo,
                                     start_date=start_date, end_date=end_date,
-                                    branch=branch)
+                                    branch=branch, auth=auth)
     print_active_users(active_users)
     pulls_open = get_pulls(connection, owner, repo, start_date=start_date,
                            end_date=end_date, branch=branch)
