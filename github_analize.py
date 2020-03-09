@@ -29,7 +29,7 @@ DAYS_OLD_ISSUES = 14
 def get_arguments():
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        '--url', dest='url', action='store',
+        '--url', dest='url', action='store', required=True,
         help='url репозитория.'
     )
     parser.add_argument(
