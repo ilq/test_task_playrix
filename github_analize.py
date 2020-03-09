@@ -132,9 +132,13 @@ def get_active_users(connection, owner, repo,
                      start_date=None, end_date=None, branch=None):
     type_api = 'commits'
     active_users = Counter()
-    parameters = {'since': format_str_datetime_github(start_date),
-                  'until': format_str_datetime_github(end_date),
-                  'sha': branch}
+    parameters = dict()
+    if branch:
+        parameters['sha']: branch
+    if start_date:
+        parameters['since'] = format_str_datetime_github(start_date)
+    if end_date:
+        parameters['until'] = format_str_datetime_github(end_date)
 
     for commit in generator_response_from_api_github(
             connection, owner, repo, type_api, parameters):
@@ -146,24 +150,19 @@ def get_active_users(connection, owner, repo,
 
 
 def print_active_users(active_users):
-    print('|{:*^31}|'.format(''))
-    print('|{: ^31}|'.format('Active users'))
-    print('|{:*^31}|'.format(''))
-    print('|{: ^20}|{: ^10}|'.format('Author', 'Count'))
-    print('|{:*^31}|'.format(''))
-
-    for author, count in active_users.most_common(MAX_ACTIVE_USER):
-        print('|{: ^20}|{: ^10}|'.format(author, count))
-
-    print('|{:*^31}|'.format(''))
+    for idx, (author, count) \
+            in enumerate(active_users.most_common(MAX_ACTIVE_USER)):
+        print(f'Active users;{idx+1};{author};{count}')
 
 
 def get_pulls(connection, owner, repo, start_date=None,
               end_date=None, branch=None, state='open'):
     type_api = 'pulls'
     pulls = Counter()
-    parameters = {'sort': 'created', 'direction': 'desc',
-                  'state': state, 'base': branch}
+    parameters = {'sort': 'created', 'direction': 'desc', 'state': state}
+
+    if branch:
+        parameters['base'] = branch
 
     for pull in generator_response_from_api_github(
             connection, owner, repo, type_api, parameters):
@@ -178,22 +177,15 @@ def get_pulls(connection, owner, repo, start_date=None,
     return pulls
 
 
-def print_pulls(pulls):
-    print('|{:*^21}|'.format(''))
-    print('|{: ^21}|'.format('Pull requests'))
-    print('|{:*^21}|'.format(''))
-    print('|{: ^10}|{: ^10}|'.format('Open', 'Closed'))
-    print('|{:*^21}|'.format(''))
-    print('|{: ^10}|{: ^10}|'.format(pulls['open'], pulls['closed']))
-    print('|{:*^21}|'.format(''))
-
-
 def get_old_pulls(connection, owner, repo, start_date=None,
                   end_date=None, branch=None, now=None):
     old_pulls = Counter()
     type_api = 'pulls'
-    parameters = {'sort': 'created', 'direction': 'desc',
-                  'state': 'open', 'base': branch}
+    parameters = {'sort': 'created', 'direction': 'desc', 'state': 'open'}
+
+    if branch:
+        parameters['base'] = branch
+
     if not now:
         now = datetime.utcnow()
 
@@ -213,20 +205,15 @@ def get_old_pulls(connection, owner, repo, start_date=None,
     return old_pulls
 
 
-def print_old_pulls(old_pulls):
-    print('|{:*^21}|'.format(''))
-    print('|{: ^21}|'.format('Old pull requests'))
-    print('|{:*^21}|'.format(''))
-    print('|{: ^21}|'.format(old_pulls['old']))
-    print('|{:*^21}|'.format(''))
-
-
 def get_issues(connection, owner, repo, start_date=None,
               end_date=None, branch=None, state='open'):
     issues = Counter()
     type_api = 'issues'
     parameters = {'sort': 'created', 'direction': 'desc',
-                  'filter': 'all', 'base': branch, 'state': state}
+                  'filter': 'all', 'state': state}
+
+    if branch:
+        parameters['base'] = branch
 
     for issue in generator_response_from_api_github(
             connection, owner, repo, type_api, parameters):
@@ -241,16 +228,6 @@ def get_issues(connection, owner, repo, start_date=None,
     return issues
 
 
-def print_issues(issues):
-    print('|{:*^21}|'.format(''))
-    print('|{: ^21}|'.format('Issues'))
-    print('|{:*^21}|'.format(''))
-    print('|{: ^10}|{: ^10}|'.format('Open', 'Closed'))
-    print('|{:*^21}|'.format(''))
-    print('|{: ^10}|{: ^10}|'.format(issues['open'], issues['closed']))
-    print('|{:*^21}|'.format(''))
-
-
 def get_old_issues(
         connection, owner, repo, start_date=None,
         end_date=None, branch=None, state='open', now=None):
@@ -260,7 +237,10 @@ def get_old_issues(
     old_issues = Counter()
     type_api = 'issues'
     parameters = {'sort': 'created', 'direction': 'desc',
-                  'filter': 'all', 'base': branch, 'state': state}
+                  'filter': 'all', 'state': state}
+
+    if branch:
+        parameters['base'] = branch
 
     for issue in generator_response_from_api_github(
             connection, owner, repo, type_api, parameters):
@@ -276,14 +256,6 @@ def get_old_issues(
             old_issues.update(['old'])
 
     return old_issues
-
-
-def print_old_issues(old_issues):
-    print('|{:*^21}|'.format(''))
-    print('|{: ^21}|'.format('Old issues'))
-    print('|{:*^21}|'.format(''))
-    print('|{: ^21}|'.format(old_issues['old']))
-    print('|{:*^21}|'.format(''))
 
 
 def main():
@@ -309,21 +281,23 @@ def main():
     print_active_users(active_users)
     pulls_open = get_pulls(connection, owner, repo, start_date=start_date,
                            end_date=end_date, branch=branch)
+    print(f"Open pull requests;{pulls_open['open']}")
     pulls_closed = get_pulls(connection, owner, repo, start_date=start_date,
                              end_date=end_date, branch=branch, state='closed')
-    print_pulls(pulls_open + pulls_closed)
+    print(f"Closed pull requests;{pulls_closed['closed']}")
     old_pulls = get_old_pulls(connection, owner, repo, start_date=start_date,
                               end_date=end_date, branch=branch, now=now)
-    print_old_pulls(old_pulls)
+    print(f"Old pull requests;{old_pulls['old']}")
     issues_open = get_issues(connection, owner, repo, start_date=start_date,
                              end_date=end_date, branch=branch)
+    print(f"Open issues;{issues_open['open']}")
     issues_closed = get_issues(connection, owner, repo, start_date=start_date,
                                end_date=end_date, branch=branch,
                                state='closed')
-    print_issues(issues_open + issues_closed)
+    print(f"Closed issues;{issues_closed['open']}")
     old_issues = get_old_issues(connection, owner, repo, start_date=start_date,
                                 end_date=end_date, branch=branch, now=now)
-    print_old_issues(old_issues)
+    print(f"Old issues;{old_issues['old']}")
 
 
 if __name__ == '__main__':
